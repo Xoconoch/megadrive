@@ -1,0 +1,22 @@
+name: megadrive
+services:
+  megadrive:
+    environment:
+    - CRYPTO_PASSWORD=supersecret_key
+    - CRYPTO_PASSWORD2=supersecret_key2
+
+    container_name: megadrive
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - type: bind
+        source: ./main
+        target: /app/main
+        bind:
+          propagation: rshared
+      - ./accounts.json:/app/accounts.json:ro
+    image: megadrive
