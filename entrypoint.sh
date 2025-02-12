@@ -2,11 +2,57 @@
 set -euo pipefail
 
 ###############################################################################
+# If running as root and PUID/PGID are provided, create (or use) a custom user and re‑exec
+###############################################################################
+if [ "$(id -u)" -eq 0 ] && [ -n "${PUID:-}" ] && [ -n "${PGID:-}" ] && [ -z "${DROPPED_PRIV:-}" ]; then
+    echo "Running as root, but PUID and PGID are set. Creating a custom user..."
+
+    # Check if a group with PGID already exists.
+    if getent group "$PGID" > /dev/null 2>&1; then
+        group_name=$(getent group "$PGID" | cut -d: -f1)
+        echo "Group with GID $PGID already exists: $group_name"
+    else
+        group_name="customgroup"
+        groupadd -g "$PGID" "$group_name"
+        echo "Created group $group_name with GID $PGID"
+    fi
+
+    # Check if a user with the provided PUID already exists.
+    existing_user=$(getent passwd "$PUID" | cut -d: -f1 || true)
+    if [ -n "$existing_user" ]; then
+        echo "User with UID $PUID already exists: $existing_user"
+        custom_username="$existing_user"
+    else
+        custom_username="customuser"
+        useradd -u "$PUID" -g "$group_name" -m "$custom_username"
+        echo "Created user $custom_username with UID $PUID and group $group_name"
+    fi
+
+    # Ensure the fuse group exists before adding the user.
+    if ! getent group fuse >/dev/null 2>&1; then
+        echo "Fuse group does not exist. Creating fuse group..."
+        groupadd fuse
+    fi
+
+    # Add the user to the fuse group.
+    usermod -aG fuse "$custom_username" || true
+
+    # Adjust ownership of directories that need to be writable.
+    # We avoid changing ownership on the read-only bind mount (/app/accounts.json).
+    chown -R "$custom_username":"$group_name" /app/main /tmp || true
+
+    # Mark that we already dropped privileges to avoid recursion.
+    export DROPPED_PRIV=1
+    echo "Dropping privileges to $custom_username (UID=$PUID, GID=$PGID -> group: $group_name)."
+    exec gosu "$custom_username" "$0" "$@"
+fi
+
+###############################################################################
 # Cleanup function: unmount /app/main on termination
 ###############################################################################
 cleanup() {
     echo "Caught termination signal. Unmounting /app/main..."
-    # Try to unmount using fusermount (for FUSE-based mounts), falling back to umount if needed.
+    # Use fusermount (for FUSE-based mounts), falling back to umount if needed.
     if command -v fusermount &>/dev/null; then
         fusermount -u /app/main || umount /app/main
     else
@@ -16,7 +62,7 @@ cleanup() {
     exit 0
 }
 
-# Trap SIGTERM and SIGINT signals to run the cleanup function.
+# Trap SIGTERM and SIGINT to run cleanup.
 trap cleanup SIGTERM SIGINT
 
 ###############################################################################
@@ -81,9 +127,8 @@ for account in $accounts; do
 
       echo "Starting MEGA WebDAV for account $account on port $port serving folder $TARGET_FOLDER..."
       # Launch mega-webdav and redirect its output to the log file.
-      # (It will print a line like: "Serving via webdav /MyMegaFiles: http://127.0.0.1:8080/5l4RQYDS/MyMegaFiles")
       mega-webdav "$TARGET_FOLDER" --port="$port" --public > "$LOG_FILE" 2>&1
-    ) &  # Run the whole subshell in the background.
+    ) &  # Run the subshell in the background.
     
     # Wait (up to 10 seconds) for the log file to contain the expected output.
     max_wait=10
@@ -97,7 +142,6 @@ for account in $accounts; do
     done
 
     # Extract the URL from the log file.
-    # Expected format: "Serving via webdav /MyMegaFiles: http://127.0.0.1:8080/5l4RQYDS/MyMegaFiles"
     log_line=$(grep "Serving via webdav" "$LOG_FILE" | head -n 1 || true)
     url=$(echo "$log_line" | awk -F': ' '{print $2}' | tr -d '[:space:]')
     
@@ -116,12 +160,12 @@ for account in $accounts; do
     port=$((port+1))
 done
 
-# Wait for the WebDAV servers to fully start (a global wait in case any are still initializing).
+# Wait for the WebDAV servers to fully start.
 echo "Waiting for WebDAV servers to fully start..."
 sleep 5
 
 # Write the accumulated rclone configuration to a file.
-RCLONE_CONFIG_FILE="/app/rclone.conf"
+RCLONE_CONFIG_FILE="/tmp/rclone.conf"
 echo "Writing rclone configuration to $RCLONE_CONFIG_FILE"
 echo "$RCLONE_CONFIG" > "$RCLONE_CONFIG_FILE"
 
@@ -144,11 +188,9 @@ rclone config create mega_union union upstreams="$union_remotes" --config "$RCLO
 echo "Creating crypt remote 'encrypted' on top of union remote 'mega_union'..."
 
 # Use environment variables CRYPTO_PASSWORD and CRYPTO_PASSWORD2 for encryption.
-# These default to "changeme" values if not provided (change these in production!)
 CRYPTO_PASSWORD="${CRYPTO_PASSWORD:-changeme}"
 CRYPTO_PASSWORD2="${CRYPTO_PASSWORD2:-changeme2}"
 
-# The rclone "crypt" remote will use "mega_union:" as its underlying remote.
 rclone config create encrypted crypt remote mega_union: \
     password "$(rclone obscure "$CRYPTO_PASSWORD")" \
     password2 "$(rclone obscure "$CRYPTO_PASSWORD2")" \

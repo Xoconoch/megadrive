@@ -4,7 +4,8 @@ services:
     environment:
     - CRYPTO_PASSWORD=supersecret_key
     - CRYPTO_PASSWORD2=supersecret_key2
-
+    - PUID=1000
+    - PGID=1000
     container_name: megadrive
     cap_add:
       - SYS_ADMIN
