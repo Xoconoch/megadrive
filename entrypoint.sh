@@ -100,15 +100,8 @@ for account in $accounts; do
     # Create a dedicated temporary directory for MEGAcmd configuration.
     MEGA_CONFIG_DIR="/tmp/mega_${account}"
     mkdir -p "$MEGA_CONFIG_DIR"
-    
-    # Choose a shared folder to serve for this account.
-    if [ "$account" = "mega1" ]; then
-        TARGET_FOLDER="/MyMegaFiles"
-    elif [ "$account" = "mega2" ]; then
-        TARGET_FOLDER="/AnotherMegaFolder"
-    else
+
         TARGET_FOLDER="/MyMegaFiles_${account}"
-    fi
 
     # Define a log file to capture the output of mega-webdav.
     LOG_FILE="/tmp/mega_webdav_${account}.log"
