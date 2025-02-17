@@ -102,6 +102,8 @@ start_account() {
     echo "Logging into MEGA for account $account..."
     mega-login "$user" "$pass"
     sleep 2  # Allow time for login.
+
+    echo "confirm --security" | mega-cmd || true
     
     echo "Creating shared folder $TARGET_FOLDER (if it doesn't exist)..."
     mega-mkdir "$TARGET_FOLDER" 2>/dev/null || true
@@ -142,7 +144,7 @@ start_account() {
 # Initiate all accounts concurrently, but no more than 5 at a time.
 # -----------------------------------------------------------------------------
 port=8080
-max_concurrent=100
+max_concurrent=200
 for account in $accounts; do
     start_account "$account" "$port" &
     port=$((port+1))
